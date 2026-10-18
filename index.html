@@ -34,8 +34,8 @@ button.p{background:#168a45;color:#fff}
 input,button{font-size:16px}button{min-height:44px}
 #hint{display:none}#toast{top:8px;right:8px;left:8px;max-width:none;text-align:center;padding:8px 12px;font-size:13px}}
 .hidden{display:none!important}
-#tabs{display:flex;gap:6px;margin:12px 0 0}#tabs button{flex:1;margin:0;padding:9px 4px;font-size:13px}#tabs button.on{background:#168a45;color:#fff}
-#trInfo,#tbStats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:8px}
+#tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 0}#tabs button{flex:1 1 40%;margin:0;padding:9px 4px;font-size:13px}#tabs button.on{background:#168a45;color:#fff}
+#trInfo,#tbStats,#fStats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:8px}
 @media(pointer:coarse){.row{padding:10px}.row button{min-height:36px;padding:6px 12px}}
 </style>
 </head>
@@ -43,7 +43,7 @@ input,button{font-size:16px}button{min-height:44px}
 <header><h1>Material Flow 3D</h1><p>ESD Bin Consumption &amp; Multi-Part Simulator</p></header>
 <div id="app">
 <div id="side">
-  <div id="tabs"><button data-m="bin" class="on">Bin</button><button data-m="trolley">Trolley</button><button data-m="tb">Bins in Trolley</button></div>
+  <div id="tabs"><button data-m="bin" class="on">Bin</button><button data-m="trolley">Trolley</button><button data-m="tb">Bins in Trolley</button><button data-m="fifo">FIFO Rack</button></div>
   <div id="binUI">
   <h2>1. Bin Dimensions</h2>
   <div class="r2"><label>Internal Length (mm)<input id="bL" type="number" value="400"></label><label>Internal Width (mm)<input id="bW" type="number" value="300"></label></div>
@@ -80,6 +80,16 @@ input,button{font-size:16px}button{min-height:44px}
       <button id="tbUse">Use Current Bin</button><button class="p" id="tbGo">Load Bins into Trolley</button>
       <div id="tbStats"></div></div>
   </div>
+  <div id="fifoUI" class="hidden"><h2>FIFO Rack Dimensions</h2>
+    <div class="r2"><label>Rack Length (mm)<input id="fL" type="number" value="1800"></label><label>Rack Depth (mm)<input id="fD" type="number" value="700"></label></div>
+    <div class="r2"><label>Rack Height (mm)<input id="fH" type="number" value="1700"></label><label>No. of Levels<input id="fN" type="number" value="5"></label></div>
+    <div class="r2"><label>Bottom Clearance (mm)<input id="fB" type="number" value="150"></label><label>Roller Tilt (°, front down)<input id="fA" type="number" step="any" value="5"></label></div>
+    <h2>FIFO Bin Type</h2>
+    <div class="r2"><label>Bin Width, across lane (mm)<input id="fbW" type="number" value="150"></label><label>Bin Length, along depth (mm)<input id="fbL" type="number" value="300"></label></div>
+    <div class="r2"><label>Bin Height (mm)<input id="fbH" type="number" value="130"></label><label>Lane Gap (mm)<input id="fGap" type="number" value="10"></label></div>
+    <label>Bins to Load<input id="fQ" type="number" value="60"></label>
+    <button id="fUse">Use Current Bin</button><button class="p" id="fGo">Update FIFO Rack</button><button id="fPlay">Replay Loading</button>
+    <div id="fStats"></div></div>
 </div>
 <div id="view">
   <div id="toast"></div>
@@ -105,7 +115,7 @@ const binG = new THREE.Group(), pcG = new THREE.Group(); scene.add(binG, pcG);
 const unit = new THREE.BoxGeometry(1,1,1), edgeG = new THREE.EdgesGeometry(unit), edgeM = new THREE.LineBasicMaterial({color:0x222222});
 let th = .8, ph = 1.0, rad = 900; const tgt = new THREE.Vector3(0,80,0);
 function setCam(){ cam.position.set(tgt.x+rad*Math.sin(ph)*Math.sin(th), tgt.y+rad*Math.cos(ph), tgt.z+rad*Math.sin(ph)*Math.cos(th)); cam.lookAt(tgt); }
-function resetView(){ const D=(typeof mode==='undefined'||mode==='bin')?bin:tr; th=.8; ph=1.0; rad=Math.max(D.L,D.W,D.H)*2.1; tgt.set(0,D.H*.3,0); setCam(); }
+function resetView(){ const D=(typeof mode==='undefined'||mode==='bin')?bin:mode==='fifo'?{L:fr.L,W:fr.D,H:fr.H}:tr; th=.8; ph=1.0; rad=Math.max(D.L,D.W,D.H)*2.1; tgt.set(0,D.H*.3,0); setCam(); }
 function size(){ const v=$('view'); rd.setSize(v.clientWidth, v.clientHeight); cam.aspect=v.clientWidth/v.clientHeight; cam.updateProjectionMatrix(); }
 new ResizeObserver(size).observe($('view'));
 
@@ -315,19 +325,75 @@ function loadBins(silent){
   $('tbStats').innerHTML=`Shelf usable: ${r1(L)} × ${r1(W)} mm · clear height ${r1(c)} mm<br>Bins per slot: <b>${cap}</b> (${foot} on shelf × ${Math.max(1,Math.round(cap/foot))} level)<br>Trolley capacity: <b>${total}</b> bins (${tr.n} slots)<br>Requested: ${q} · Loaded: ${loaded} · <b style="color:${left?'#d33':'#168a45'}">Unplaced: ${left}</b><br>Trolleys required: <b>${need}</b><br>Slot volume used: ${(loaded*l*w*h/(tr.n*L*W*c)*100).toFixed(1)}%`;
   if(!silent) toast(left?`Trolley capacity exceeded — ${left} bins need another trolley.`:'All bins loaded in the trolley.');
 }
+/* ---------- FIFO rack: tilted roller lanes, bins slide to the front ---------- */
+let fr={L:1800,D:700,H:1700,n:5,bot:150,a:5};
+const frG=new THREE.Group(); scene.add(frG);
+const aluM=new THREE.MeshLambertMaterial({color:0xc9ced2}), rollM=new THREE.MeshLambertMaterial({color:0x3a3f43}), labM=new THREE.MeshLambertMaterial({color:0x1f9d55}), fbM=new THREE.MeshLambertMaterial({color:0x22272a});
+const RP=40, RR=8, rlM=new THREE.MeshLambertMaterial({color:0x8a9299}), rollG=new THREE.CylinderGeometry(1,1,1,10);
+rollG.rotateZ(Math.PI/2);                                   // roller axis along X (across the lanes)
+let fAnim=null, fItems=[];
+const rollerAt=(par,z,len,y)=>{ const m=new THREE.Mesh(rollG,rlM); m.scale.set(len,RR,RR); m.position.set(0,y,z); par.add(m); };
+function animFifo(){   // bins loaded at the high (back) end slide down to the front stop
+  if(!fAnim) return;
+  const k=Math.min(1,(performance.now()-fAnim.t0)/2200), e=k*k*(3-2*k);
+  fAnim.items.forEach(i=>i.m.position.z=i.z0+(i.z1-i.z0)*e);
+  if(k>=1) fAnim=null;
+}
+function buildFifo(silent,animate){
+  const v=id=>num(id), M=20, K=30;                      // M = end margin on the track, K = deck thickness
+  const t={L:v('fL'),D:v('fD'),H:v('fH'),n:v('fN'),bot:v('fB'),a:v('fA')}, w=v('fbW'), l=v('fbL'), h=v('fbH'), g=v('fGap'), q=v('fQ');
+  if(![t.L,t.D,t.H,w,l,h].every(x=>x>0)||!Number.isInteger(t.n)||t.n<1||t.n>10||!(t.bot>=0)||!(t.a>=0&&t.a<=20)||!(g>=0)||!Number.isInteger(q)||q<1)
+    return toast('Enter valid FIFO values (levels 1–10, tilt 0–20°, quantity whole ≥ 1).');
+  const ar=t.a*Math.PI/180, tl=t.D/Math.cos(ar), pitch=(t.H-t.bot)/t.n, clear=(pitch-K)*Math.cos(ar);
+  const lanes=Math.floor((t.L-2*M+g)/(w+g)), per=Math.floor((tl-2*M)/l);
+  if(clear<h+RR) return toast(`Bin too tall: clear height per level is only ${r1(clear)} mm.`);
+  if(lanes<1||per<1) return toast('Bin does not fit on the roller lane (check width / length).');
+  fr=t; clearG(frG); const items=[], anim=!!animate;
+  const add=(par,mat,sx,sy,sz,x,y,z)=>{ const b=new THREE.Mesh(unit,mat); b.scale.set(sx,sy,sz); b.position.set(x,y,z); par.add(b); return b; };
+  const p=Math.min(40,t.L/10,t.D/10);
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([a,b])=>{ add(frG,aluM,p,t.H,p,a*(t.L-p)/2,t.H/2,b*(t.D-p)/2); add(frG,rollM,p*1.5,t.bot*.6,p*1.5,a*(t.L-p)/2,t.bot*.3,b*(t.D-p)/2); });
+  const cap=lanes*per*t.n, loaded=Math.min(q,cap); let left=loaded;
+  for(let i=0;i<t.n;i++){
+    const base=t.bot+i*pitch; left=Math.max(0,Math.min(lanes*per,loaded-(t.n-1-i)*lanes*per));   // fill from the top shelf downward
+    add(frG,aluM,t.L,p*.8,p*.8,0,base,(t.D-p)/2);                                   // front beam
+    add(frG,aluM,t.L,p*.8,p*.8,0,base+tl*Math.sin(ar),-(t.D-p)/2);                  // back beam
+    const grp=new THREE.Group(); grp.position.set(0,base+K/2+tl/2*Math.sin(ar),0); grp.rotation.x=ar; frG.add(grp);   // +x rotation lowers the front (+z)
+    add(grp,rollM,t.L-2*p,K,tl,0,0,0);
+    for(let s=-tl/2+10;s<=tl/2-10+1e-6;s+=RP) rollerAt(grp,s,t.L-2*p,K/2);                                   // rollers
+    const tw=lanes*w+(lanes-1)*g;
+    for(let a=0;a<=lanes;a++) add(grp,aluM,Math.max(2,Math.min(g,6)),h*.7,tl-2*M,-tw/2+a*(w+g)-g/2,K/2+RR+h*.35,0);   // lane separators                                               // roller deck
+    [-1,1].forEach(s=>add(grp,aluM,p/2,K*1.6,tl,s*(t.L/2-p),0,0));                  // side rails
+    add(grp,aluM,t.L-2*p,K*1.8,12,0,0,tl/2);                                         // front stop
+    for(let a=0;a<lanes&&left>0;a++){ const c=Math.min(per,left); left-=c; for(let j=0;j<c;j++){
+      const x=-(lanes*w+(lanes-1)*g)/2+w/2+a*(w+g), z1=tl/2-M-(j+.5)*l, z0=-tl/2+M+(c-1-j+.5)*l, z=anim?z0:z1;               // bins packed at the front
+      const bm=add(grp,fbM,w,h,l,x,K/2+RR+h/2,z);
+      bm.add(new THREE.LineSegments(edgeG,tbEdge));
+      const lb=new THREE.Mesh(unit,labM); lb.scale.set(.7,.3,.03); lb.position.set(0,.1,.5); bm.add(lb); items.push({m:bm,z0,z1}); }
+    }
+  }
+  fItems=items; fAnim=anim&&items.length?{t0:performance.now(),items}:null;
+  $('fStats').innerHTML=`Lanes per level: <b>${lanes}</b> · bins per lane: <b>${per}</b><br>Capacity: ${lanes*per} per level · <b>${cap}</b> total (${t.n} levels)<br>Requested: ${q} · Loaded: ${loaded} · <b style="color:${q>cap?'#d33':'#168a45'}">Unplaced: ${q-loaded}</b><br>Racks required: <b>${Math.ceil(q/cap)}</b><br>Roller length: ${r1(tl)} mm · front drop: ${r1(tl*Math.sin(ar))} mm<br>Clear height per level: ${r1(clear)} mm (bin ${h} mm)`;
+  if(!silent) toast(q>cap?`FIFO capacity exceeded — ${q-cap} bins need another rack.`:'Bins loaded from the top (back) end and sliding to the front.');
+}
+$('fGo').onclick=()=>{ buildFifo(false,true); resetView(); };
+$('fPlay').onclick=()=>{ if(!fItems.length) return; fItems.forEach(i=>i.m.position.z=i.z0); fAnim={t0:performance.now(),items:fItems}; };
+$('fUse').onclick=()=>{ $('fbW').value=bin.W+2*bin.t; $('fbL').value=bin.L+2*bin.t; $('fbH').value=bin.H+bin.t; toast('Bin size copied from the Bin tab'); };
+
 function useBin(){ $('tbL').value=bin.L+2*bin.t; $('tbW').value=bin.W+2*bin.t; $('tbH').value=bin.H+bin.t; }
 function setMode(m){
   mode=m;
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
-  $('binUI').classList.toggle('hidden',m!=='bin'); $('trUI').classList.toggle('hidden',m==='bin'); $('tbDef').classList.toggle('hidden',m!=='tb');
-  binG.visible=pcG.visible=(m==='bin'); trG.visible=(m!=='bin'); tbG.visible=(m==='tb');
+  const T=(m==='trolley'||m==='tb');
+  $('binUI').classList.toggle('hidden',m!=='bin'); $('trUI').classList.toggle('hidden',!T); $('tbDef').classList.toggle('hidden',m!=='tb'); $('fifoUI').classList.toggle('hidden',m!=='fifo');
+  binG.visible=pcG.visible=(m==='bin'); trG.visible=T; tbG.visible=(m==='tb'); frG.visible=(m==='fifo');
+  if(m==='fifo') buildFifo(true,true);
   grid.position.y=m==='bin'?-bin.t-1:-1; resetView();
 }
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>setMode(b.dataset.m));
 $('applyTr').onclick=()=>{ if(readTr()){ buildTrolley(); loadBins(true); resetView(); toast('Trolley updated'); } };
 $('tbGo').onclick=()=>{ if(readTr()){ buildTrolley(); loadBins(); } };
 $('tbUse').onclick=()=>{ useBin(); toast('Bin size copied from the Bin tab'); };
-function initTrolley(){ buildTrolley(); useBin(); loadBins(true); setMode('bin'); }
+function initTrolley(){ buildTrolley(); useBin(); loadBins(true); buildFifo(true); setMode('bin'); }
 
 /* ---------- start ---------- */
 [['PART-A',100,50,20,20],['PART-B',80,40,30,15],['PART-C',60,30,25,10]].forEach(a=>{
@@ -335,7 +401,7 @@ function initTrolley(){ buildTrolley(); useBin(); loadBins(true); setMode('bin')
   p.mat=new THREE.MeshLambertMaterial({color:p.col}); parts.push(p);
 });
 size(); buildBin(); resetView(); pack(); initTrolley();
-(function loop(){ requestAnimationFrame(loop); rd.render(scene,cam); })();
+(function loop(){ requestAnimationFrame(loop); animFifo(); rd.render(scene,cam); })();
 </script>
 </body>
 </html>
