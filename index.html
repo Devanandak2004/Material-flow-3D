@@ -35,7 +35,7 @@ input,button{font-size:16px}button{min-height:44px}
 #hint{display:none}#toast{top:8px;right:8px;left:8px;max-width:none;text-align:center;padding:8px 12px;font-size:13px}}
 .hidden{display:none!important}
 #tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 0}#tabs button{flex:1 1 40%;margin:0;padding:9px 4px;font-size:13px}#tabs button.on{background:#168a45;color:#fff}
-#trInfo,#tbStats,#fStats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:8px}
+#trInfo,#tbStats,#fStats,#egStats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:8px}
 @media(pointer:coarse){.row{padding:10px}.row button{min-height:36px;padding:6px 12px}}
 </style>
 </head>
@@ -43,7 +43,7 @@ input,button{font-size:16px}button{min-height:44px}
 <header><h1>Material Flow 3D</h1><p>ESD Bin Consumption &amp; Multi-Part Simulator</p></header>
 <div id="app">
 <div id="side">
-  <div id="tabs"><button data-m="bin" class="on">Bin</button><button data-m="trolley">Trolley</button><button data-m="tb">Bins in Trolley</button><button data-m="fifo">FIFO Rack</button></div>
+  <div id="tabs"><button data-m="bin" class="on">Bin</button><button data-m="trolley">Trolley</button><button data-m="tb">Bins in Trolley</button><button data-m="fifo">FIFO Rack</button><button data-m="ergo">Ergo Trolley</button></div>
   <div id="binUI">
   <h2>1. Bin Dimensions</h2>
   <div class="r2"><label>Internal Length (mm)<input id="bL" type="number" value="400"></label><label>Internal Width (mm)<input id="bW" type="number" value="300"></label></div>
@@ -90,6 +90,18 @@ input,button{font-size:16px}button{min-height:44px}
     <label>Bins to Load<input id="fQ" type="number" value="60"></label>
     <button id="fUse">Use Current Bin</button><button class="p" id="fGo">Update FIFO Rack</button><button id="fPlay">Replay Loading</button>
     <div id="fStats"></div></div>
+  <div id="egUI" class="hidden"><h2>Operator Heights (mm)</h2>
+    <div class="r2" style="grid-template-columns:repeat(3,1fr)"><label>Short (5th % F)<input id="eH1" type="number" value="1480"></label><label>Average<input id="eH2" type="number" value="1650"></label><label>Tall (95th % M)<input id="eH3" type="number" value="1820"></label></div>
+    <h2>Ergo Trolley</h2>
+    <div class="r2"><label>Length (mm)<input id="eL" type="number" value="1000"></label><label>Depth (mm)<input id="eW" type="number" value="600"></label></div>
+    <div class="r2"><label>No. of Levels<input id="eN" type="number" value="4"></label><label>Shelf Tilt (°, front down)<input id="eTilt" type="number" step="any" value="12"></label></div>
+    <div class="r2"><label>Lowest Shelf Front Edge (mm)<input id="eLow" type="number" value="520"></label><label>Level Pitch (mm)<input id="ePitch" type="number" value="200"></label></div>
+    <label>Push Handle Height (mm)<input id="eHandle" type="number" value="1000"></label>
+    <h2>ESD Bin</h2>
+    <div class="r2"><label>Width (mm)<input id="ebW" type="number" value="200"></label><label>Length, front-to-back (mm)<input id="ebL" type="number" value="300"></label></div>
+    <div class="r2"><label>Height (mm)<input id="ebH" type="number" value="120"></label><label>Loaded Bin Weight (kg)<input id="ebKg" type="number" step="any" value="3"></label></div>
+    <button class="p" id="egGo">Update Ergo Trolley</button><button id="egAuto">Auto-Fit Shelf Heights</button>
+    <div id="egStats"></div></div>
 </div>
 <div id="view">
   <div id="toast"></div>
@@ -115,7 +127,7 @@ const binG = new THREE.Group(), pcG = new THREE.Group(); scene.add(binG, pcG);
 const unit = new THREE.BoxGeometry(1,1,1), edgeG = new THREE.EdgesGeometry(unit), edgeM = new THREE.LineBasicMaterial({color:0x222222});
 let th = .8, ph = 1.0, rad = 900; const tgt = new THREE.Vector3(0,80,0);
 function setCam(){ cam.position.set(tgt.x+rad*Math.sin(ph)*Math.sin(th), tgt.y+rad*Math.cos(ph), tgt.z+rad*Math.sin(ph)*Math.cos(th)); cam.lookAt(tgt); }
-function resetView(){ const D=(typeof mode==='undefined'||mode==='bin')?bin:mode==='fifo'?{L:fr.L,W:fr.D,H:fr.H}:tr; th=.8; ph=1.0; rad=Math.max(D.L,D.W,D.H)*2.1; tgt.set(0,D.H*.3,0); setCam(); }
+function resetView(){ const D=(typeof mode==='undefined'||mode==='bin')?bin:mode==='fifo'?{L:fr.L,W:fr.D,H:fr.H}:mode==='ergo'?{L:1800,W:1200,H:1900}:tr; th=.8; ph=1.0; rad=Math.max(D.L,D.W,D.H)*2.1; tgt.set(0,D.H*.3,0); setCam(); }
 function size(){ const v=$('view'); rd.setSize(v.clientWidth, v.clientHeight); cam.aspect=v.clientWidth/v.clientHeight; cam.updateProjectionMatrix(); }
 new ResizeObserver(size).observe($('view'));
 
@@ -379,14 +391,92 @@ $('fGo').onclick=()=>{ buildFifo(false,true); resetView(); };
 $('fPlay').onclick=()=>{ if(!fItems.length) return; fItems.forEach(i=>i.m.position.z=i.z0); fAnim={t0:performance.now(),items:fItems}; };
 $('fUse').onclick=()=>{ $('fbW').value=bin.W+2*bin.t; $('fbL').value=bin.L+2*bin.t; $('fbH').value=bin.H+bin.t; toast('Bin size copied from the Bin tab'); };
 
+/* ---------- ergonomic trolley concept: reach zones for short / average / tall operators ---------- */
+const egG=new THREE.Group(); scene.add(egG);
+const egBinM=new THREE.MeshLambertMaterial({color:0x22272a}), egDeckM=new THREE.MeshLambertMaterial({color:0x2e6b4b});
+const ZC={g:'#2e9e5b',y:'#e0a800',r:'#d33'};
+// approximate segment heights from stature (Drillis & Contini ratios) – design assumption, not a standard
+const body=H=>({k:.377*H, e:.63*H, s:.818*H, eye:.936*H});      // knuckle, elbow, shoulder, eye
+const cls=(y,b)=>y>=b.k&&y<=b.e?'g':(y>=b.k-100&&y<=b.s?'y':'r');   // best / acceptable / poor
+const cell=(c,t)=>`<td style="background:${ZC[c]};color:#fff;text-align:center;padding:2px 4px">${t}</td>`;
+const egZones=hs=>{ const b=hs.map(body); return {b, gLo:Math.max(...b.map(x=>x.k)), gHi:Math.min(...b.map(x=>x.e)), aLo:Math.max(...b.map(x=>x.k-100)), aHi:Math.min(...b.map(x=>x.s)), eye:Math.min(...b.map(x=>x.eye))}; };
+function person(H,x,z,col){
+  const g=new THREE.Group(), m=new THREE.MeshLambertMaterial({color:col});
+  const bx=(sx,sy,sz,px,py,pz)=>{ const b=new THREE.Mesh(unit,m); b.scale.set(sx*H,sy*H,sz*H); b.position.set(px*H,py*H,pz*H); g.add(b); };
+  bx(.075,.53,.09,-.055,.265,0); bx(.075,.53,.09,.055,.265,0);     // legs
+  bx(.27,.29,.13,0,.675,0);                                         // torso (hip .53H to shoulder .82H)
+  bx(.05,.44,.05,-.165,.6,0); bx(.05,.44,.05,.165,.6,0);            // arms
+  const hd=new THREE.Mesh(new THREE.SphereGeometry(.06*H,12,10),m); hd.position.y=.935*H; g.add(hd);
+  g.position.set(x,0,z); egG.add(g);
+}
+function openBin(par,w,h,l,x,y,z){      // picking bin: tall back/sides, low front lip, hand-friendly open face
+  const bg=new THREE.Group(); bg.position.set(x,y,z); par.add(bg); const t=3;
+  const add=(sx,sy,sz,px,py,pz)=>{ const m=new THREE.Mesh(unit,egBinM); m.scale.set(sx,sy,sz); m.position.set(px,py,pz); bg.add(m); };
+  add(w,t,l,0,t/2,0); add(t,h,l,-w/2+t/2,h/2,0); add(t,h,l,w/2-t/2,h/2,0); add(w,h,t,0,h/2,-l/2+t/2); add(w,h*.35,t,0,h*.175,l/2-t/2);
+  const lb=new THREE.Mesh(unit,labM); lb.scale.set(w*.6,h*.22,2); lb.position.set(0,h*.15,l/2+1); bg.add(lb);
+}
+function ergoRead(){ const v=id=>num(id); return {hs:[v('eH1'),v('eH2'),v('eH3')],L:v('eL'),W:v('eW'),n:v('eN'),low:v('eLow'),pit:v('ePitch'),a:v('eTilt'),hh:v('eHandle'),w:v('ebW'),l:v('ebL'),h:v('ebH'),kg:v('ebKg')}; }
+function buildErgo(silent){
+  const q=ergoRead(), K=25, M=20, ar=q.a*Math.PI/180, tl=q.W/Math.cos(ar), cs=Math.cos(ar), sn=Math.sin(ar);
+  if(![q.L,q.W,q.pit,q.hh,q.w,q.l,q.h].every(x=>x>0)||!(q.low>=130)||!q.hs.every(x=>x>1000&&x<2300)||!Number.isInteger(q.n)||q.n<1||q.n>6||!(q.a>=0&&q.a<=25)||!(q.kg>=0))
+    return toast('Enter valid values (heights 1000–2300 mm, lowest shelf ≥ 130, levels 1–6, tilt 0–25°).');
+  const lanes=Math.floor((q.L-2*M+10)/(q.w+10)), fit=Math.floor((tl-2*M)/q.l), rows=Math.min(fit,Math.max(1,Math.floor(500/q.l)));   // 500 mm max comfortable reach into the trolley
+  if(lanes<1||fit<1) return toast('Bin does not fit on the trolley shelf.');
+  if(q.n>1&&(q.pit-K)*cs<q.h+40) return toast(`Level pitch too small: needs ≥ ${Math.ceil(K+(q.h+40)/cs)} mm for this bin (hand clearance 40 mm).`);
+  clearG(egG);
+  const add=(par,mat,sx,sy,sz,x,y,z)=>{ const b=new THREE.Mesh(unit,mat); b.scale.set(sx,sy,sz); b.position.set(x,y,z); par.add(b); return b; };
+  const topY=q.low+(q.n-1)*q.pit+rows*q.l*sn+q.h, FH=topY+60, p=30;
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([a,b])=>{ add(egG,aluM,p,FH-100,p,a*(q.L/2-p),100+(FH-100)/2,b*(q.W/2-p)); add(egG,rollM,50,100,50,a*(q.L/2-p),50,b*(q.W/2-p)); });   // posts + castors
+  add(egG,aluM,q.L,20,q.W,0,110,0);                                                       // base platform
+  [-1,1].forEach(s=>add(egG,aluM,p,q.hh-100,p,-q.L/2-40,100+(q.hh-100)/2,s*(q.W/2-60)));   // handle uprights
+  add(egG,aluM,p,p,q.W-100,-q.L/2-40,q.hh,0);                                              // push handle bar
+  for(let i=0;i<q.n;i++){
+    const yf=q.low+i*q.pit, grp=new THREE.Group(); grp.position.set(0,yf-K/2+tl/2*sn,0); grp.rotation.x=ar; egG.add(grp);
+    add(grp,egDeckM,q.L-2*p,K,tl,0,0,0); add(grp,aluM,q.L-2*p,K*1.4,10,0,0,tl/2);
+    const tw=lanes*q.w+(lanes-1)*10;
+    for(let a=0;a<lanes;a++) for(let j=0;j<rows;j++) openBin(grp,q.w,q.h,q.l,-tw/2+q.w/2+a*(q.w+10),K/2,tl/2-M-(j+.5)*q.l);
+  }
+  // operators standing in front + common reach-zone bands
+  const Z=egZones(q.hs), px=q.W/2+380;
+  [[q.hs[0],-650,0xd16ba5],[q.hs[1],0,0x5b8def],[q.hs[2],650,0x8e9aaf]].forEach(a=>person(a[0],a[1],px,a[2]));
+  const band=(lo,hi,col,op)=>{ if(hi<=lo) return; const m=add(egG,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:op,depthWrite:false}),q.L+80,hi-lo,2,0,(lo+hi)/2,q.W/2+40); m.renderOrder=3; };
+  band(Z.aLo,Z.aHi,0xf1c40f,.2); band(Z.gLo,Z.gHi,0x2ecc71,.3);
+  // evaluation table
+  let bad=0, rowsHtml='';
+  for(let i=q.n-1;i>=0;i--){
+    const y=q.low+i*q.pit+q.h/2, cells=Z.b.map(b=>{ const c=cls(y,b); if(c==='r') bad++; return cell(c,c==='g'?'Best':c==='y'?'OK':'Poor'); }).join('');
+    const inG=y>=Z.gLo&&y<=Z.gHi, hc=q.kg<=3?'g':(q.kg<=7&&inG?'g':'r'); if(hc==='r') bad++;
+    rowsHtml+=`<tr><td>L${i+1}</td><td>${Math.round(y)}</td>${cells}${cell(hc,hc==='g'?'OK':'Too heavy')}</tr>`;
+  }
+  const hcells=Z.b.map(b=>{ const d=Math.abs(q.hh-b.e), c=d<=100?'g':d<=200?'y':'r'; if(c==='r') bad++; return cell(c,c==='g'?'Best':c==='y'?'OK':'Poor'); }).join('');
+  const eyeOK=topY<=Z.eye, total=lanes*rows*q.n;
+  $('egStats').innerHTML=`<table style="width:100%;font-size:12px;border-collapse:separate;border-spacing:2px"><tr><th>Level</th><th>Pick mm</th><th>Short</th><th>Avg</th><th>Tall</th><th>${q.kg} kg</th></tr>${rowsHtml}<tr><td colspan="2">Handle ${q.hh}</td>${hcells}<td></td></tr></table>`+
+   `Best zone for all users: <b>${Z.gHi>Z.gLo?Math.round(Z.gLo)+'–'+Math.round(Z.gHi)+' mm':'none'}</b> · acceptable: ${Z.aHi>Z.aLo?Math.round(Z.aLo)+'–'+Math.round(Z.aHi)+' mm':'none'}<br>`+
+   `Capacity: <b>${total}</b> bins (${lanes} across × ${rows} deep × ${q.n} levels) · load ${r1(total*q.kg)} kg<br>`+
+   `Top of bins ${Math.round(topY)} mm – ${eyeOK?'visible':'<b style="color:#d33">above</b>'} to the shortest operator's eye level (${Math.round(Z.eye)} mm)<br>`+
+   `<b style="color:${bad?'#d33':'#168a45'}">${bad?bad+' check(s) outside the comfort zone':'ALL OPERATORS WITHIN COMFORT ZONE'}</b>`;
+  if(!silent) toast(bad?`${bad} ergonomic check(s) failed — try Auto-Fit.`:'Ergonomic design OK for all three operators.');
+}
+$('egGo').onclick=()=>{ buildErgo(); resetView(); };
+$('egAuto').onclick=()=>{
+  const q=ergoRead(), K=25, cs=Math.cos(q.a*Math.PI/180);
+  if(!q.hs.every(x=>x>1000&&x<2300)||!Number.isInteger(q.n)||q.n<1||!(q.h>0)) return toast('Enter valid operator heights, levels and bin height first.');
+  const Z=egZones(q.hs); if(Z.aHi<=Z.aLo) return toast('These operator heights have no common reach zone.');
+  const minP=Math.ceil(K+(q.h+40)/cs); let pick0=Z.aLo, pit=q.n>1?(Z.aHi-Z.aLo)/(q.n-1):q.pit;
+  if(q.n===1) pick0=(Z.gLo+Z.gHi)/2;
+  if(q.n>1&&pit<minP){ pit=minP; pick0=Math.max(Z.aLo,(Z.gLo+Z.gHi)/2-pit*(q.n-1)/2); toast('Levels are tight for this bin height – pitch set to the minimum; some levels may fall outside the zone.'); }
+  $('eLow').value=Math.max(130,Math.round(pick0-q.h/2)); $('ePitch').value=Math.round(pit||q.pit);
+  buildErgo(true); resetView();
+};
+
 function useBin(){ $('tbL').value=bin.L+2*bin.t; $('tbW').value=bin.W+2*bin.t; $('tbH').value=bin.H+bin.t; }
 function setMode(m){
   mode=m;
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
   const T=(m==='trolley'||m==='tb');
-  $('binUI').classList.toggle('hidden',m!=='bin'); $('trUI').classList.toggle('hidden',!T); $('tbDef').classList.toggle('hidden',m!=='tb'); $('fifoUI').classList.toggle('hidden',m!=='fifo');
-  binG.visible=pcG.visible=(m==='bin'); trG.visible=T; tbG.visible=(m==='tb'); frG.visible=(m==='fifo');
-  if(m==='fifo') buildFifo(true,true);
+  $('binUI').classList.toggle('hidden',m!=='bin'); $('trUI').classList.toggle('hidden',!T); $('tbDef').classList.toggle('hidden',m!=='tb'); $('fifoUI').classList.toggle('hidden',m!=='fifo'); $('egUI').classList.toggle('hidden',m!=='ergo');
+  binG.visible=pcG.visible=(m==='bin'); trG.visible=T; tbG.visible=(m==='tb'); frG.visible=(m==='fifo'); egG.visible=(m==='ergo');
+  if(m==='fifo') buildFifo(true,true); if(m==='ergo') buildErgo(true);
   grid.position.y=m==='bin'?-bin.t-1:-1; resetView();
 }
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>setMode(b.dataset.m));
