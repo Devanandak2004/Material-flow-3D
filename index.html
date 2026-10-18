@@ -9,7 +9,7 @@
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1e20;--tx:#eee;--ln:#383d40;--sub:#aaa;--in:#262a2d;--btn:#33383b;--card:#24282a}}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;font-family:Arial,sans-serif;color:var(--tx);background:var(--bg)}
-header{padding:10px 24px;border-bottom:1px solid var(--ln)}
+header{padding:10px 24px;padding-top:max(10px,env(safe-area-inset-top));border-bottom:1px solid var(--ln)}
 h1{margin:0;font-size:24px}header p{margin:2px 0 0;color:var(--sub);font-size:13px}
 #app{display:flex;height:calc(100% - 70px)}
 #side{width:330px;flex:none;overflow-y:auto;padding:6px 20px 20px;border-right:1px solid var(--ln)}
@@ -24,10 +24,16 @@ button.p{background:#168a45;color:#fff}
 .row button{margin:0;padding:3px 8px;font-size:12px}
 #info,#stats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:6px}
 #view{position:relative;flex:1;min-width:0}
-#view canvas{display:block}
+#view canvas{display:block;touch-action:none;-webkit-user-select:none;user-select:none}
 #toast{position:absolute;top:16px;right:16px;background:#fff;color:#111;padding:12px 20px;border-radius:8px;font-weight:700;box-shadow:0 2px 10px #0003;opacity:0;transition:.3s;max-width:60%}
 #hint{position:absolute;left:16px;bottom:16px;background:#fff;color:#111;padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.7;box-shadow:0 2px 10px #0003}
-@media(max-width:800px){#app{flex-direction:column;height:auto}#side{width:100%;border:0}#view{height:70vh}}
+@media(max-width:800px){h1{font-size:19px}header{padding:8px 14px;padding-top:max(8px,env(safe-area-inset-top))}header p{font-size:12px}
+#app{flex-direction:column;height:auto}
+#view{order:-1;flex:none;width:100%;height:50vh;height:50dvh;position:sticky;top:0;z-index:5;border-bottom:1px solid var(--ln)}
+#side{width:100%;border:0;overflow:visible;padding:4px 14px calc(24px + env(safe-area-inset-bottom))}
+input,button{font-size:16px}button{min-height:44px}
+#hint{display:none}#toast{top:8px;right:8px;left:8px;max-width:none;text-align:center;padding:8px 12px;font-size:13px}}
+@media(pointer:coarse){.row{padding:10px}.row button{min-height:36px;padding:6px 12px}}
 </style>
 </head>
 <body>
@@ -57,7 +63,7 @@ button.p{background:#168a45;color:#fff}
 </div>
 <div id="view">
   <div id="toast"></div>
-  <div id="hint"><b>3D Controls</b><br>Drag part = Move<br>Click part = Select<br>Rotate buttons = Change orientation<br>Mouse drag = Rotate camera<br>Scroll = Zoom</div>
+  <div id="hint"><b>3D Controls</b><br>Drag part = Move<br>Click part = Select<br>Rotate buttons = Change orientation<br>Drag empty space = Rotate camera<br>Scroll / pinch = Zoom<br>Two-finger drag = Pan</div>
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -71,7 +77,7 @@ let bin = {L:400,W:300,H:200,t:5}, parts = [], pieces = [], selPart = null, nid 
 /* ---------- scene ---------- */
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0xeef1f1);
 const cam = new THREE.PerspectiveCamera(45, 1, 1, 20000);
-const rd = new THREE.WebGLRenderer({antialias:true}); $('view').prepend(rd.domElement);
+const rd = new THREE.WebGLRenderer({antialias:true}); rd.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); $('view').prepend(rd.domElement);
 scene.add(new THREE.AmbientLight(0xffffff, .7));
 const sun = new THREE.DirectionalLight(0xffffff, .7); sun.position.set(400,800,500); scene.add(sun);
 const grid = new THREE.GridHelper(4000, 40, 0x999999, 0xcfd4d4); grid.position.y = -bin.t - 1; scene.add(grid);
@@ -189,14 +195,24 @@ $('rst').onclick=resetView;
 /* ---------- mouse: click/drag part, orbit camera, zoom ---------- */
 const ray=new THREE.Raycaster(), pt=new THREE.Vector3();
 const ndc=e=>{ const r=rd.domElement.getBoundingClientRect(); return new THREE.Vector2((e.clientX-r.left)/r.width*2-1, -(e.clientY-r.top)/r.height*2+1); };
+const ptrs=new Map(); let pinch=null;
 rd.domElement.addEventListener('pointerdown',e=>{
-  rd.domElement.setPointerCapture(e.pointerId);
+  rd.domElement.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size>=2){ const [a,b]=[...ptrs.values()]; drag=null; orbit=null; pinch={d:Math.hypot(a.x-b.x,a.y-b.y)||1,mx:(a.x+b.x)/2,my:(a.y+b.y)/2}; return; }
   ray.setFromCamera(ndc(e),cam);
   const h=ray.intersectObjects(pcG.children,false)[0];
   if(h&&e.button===0){ const c=h.object.userData.c; selPart=c.part; drag={c,yc:h.object.position.y,off:null}; draw(); }
   else orbit={x:e.clientX,y:e.clientY};
 });
 rd.domElement.addEventListener('pointermove',e=>{
+  if(ptrs.has(e.pointerId)) ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pinch&&ptrs.size===2){   // two fingers: pinch = zoom, drag = pan
+    const [a,b]=[...ptrs.values()], d=Math.hypot(a.x-b.x,a.y-b.y)||1, mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+    rad=Math.min(Math.max(rad*pinch.d/d,100),6000);
+    const s=rad*.0015, rt=new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld,0), up=new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld,1);
+    tgt.addScaledVector(rt,-(mx-pinch.mx)*s).addScaledVector(up,(my-pinch.my)*s);
+    pinch={d,mx,my}; setCam(); return;
+  }
   if(drag){
     ray.setFromCamera(ndc(e),cam);
     if(!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),-drag.yc),pt)) return;
@@ -209,7 +225,7 @@ rd.domElement.addEventListener('pointermove',e=>{
     orbit={x:e.clientX,y:e.clientY}; setCam();
   }
 });
-const endDrag=()=>{ if(drag) ui(); drag=null; orbit=null; };
+const endDrag=e=>{ ptrs.delete(e.pointerId); if(ptrs.size<2) pinch=null; if(ptrs.size===0){ if(drag) ui(); drag=null; orbit=null; } };
 rd.domElement.addEventListener('pointerup',endDrag); rd.domElement.addEventListener('pointercancel',endDrag);
 rd.domElement.addEventListener('wheel',e=>{ e.preventDefault(); rad=Math.min(Math.max(rad*(e.deltaY>0?1.1:.9),100),6000); setCam(); },{passive:false});
 
