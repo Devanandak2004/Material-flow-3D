@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Material Flow 3D</title>
+<style>
+:root{--bg:#fff;--tx:#222;--ln:#ddd;--sub:#666;--in:#fff;--btn:#e7e9eb;--card:#f4f6f6}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1e20;--tx:#eee;--ln:#383d40;--sub:#aaa;--in:#262a2d;--btn:#33383b;--card:#24282a}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:Arial,sans-serif;color:var(--tx);background:var(--bg)}
+header{padding:10px 24px;border-bottom:1px solid var(--ln)}
+h1{margin:0;font-size:24px}header p{margin:2px 0 0;color:var(--sub);font-size:13px}
+#app{display:flex;height:calc(100% - 70px)}
+#side{width:330px;flex:none;overflow-y:auto;padding:6px 20px 20px;border-right:1px solid var(--ln)}
+h2{font-size:17px;margin:16px 0 4px}
+label{display:block;font-weight:600;font-size:12px;margin-top:8px}
+input{width:100%;padding:8px;border:1px solid var(--ln);border-radius:6px;font-size:14px;margin-top:3px;background:var(--in);color:var(--tx)}
+.r2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{padding:8px 12px;border:0;border-radius:6px;background:var(--btn);color:var(--tx);font-weight:700;cursor:pointer;margin:6px 4px 0 0}
+button.p{background:#168a45;color:#fff}
+.row{display:flex;align-items:center;gap:6px;padding:6px 8px;margin-top:5px;border:1px solid var(--ln);border-radius:6px;font-size:13px;cursor:pointer}
+.row.s{background:#fff3b0;color:#222;border-color:#c9a200}.row span{flex:1}.row i{width:12px;height:12px;border-radius:3px}
+.row button{margin:0;padding:3px 8px;font-size:12px}
+#info,#stats{font-size:13px;line-height:1.6;background:var(--card);padding:8px 10px;border-radius:6px;margin-top:6px}
+#view{position:relative;flex:1;min-width:0}
+#view canvas{display:block}
+#toast{position:absolute;top:16px;right:16px;background:#fff;color:#111;padding:12px 20px;border-radius:8px;font-weight:700;box-shadow:0 2px 10px #0003;opacity:0;transition:.3s;max-width:60%}
+#hint{position:absolute;left:16px;bottom:16px;background:#fff;color:#111;padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.7;box-shadow:0 2px 10px #0003}
+@media(max-width:800px){#app{flex-direction:column;height:auto}#side{width:100%;border:0}#view{height:70vh}}
+</style>
+</head>
+<body>
+<header><h1>Material Flow 3D</h1><p>ESD Bin Consumption &amp; Multi-Part Simulator</p></header>
+<div id="app">
+<div id="side">
+  <h2>1. Bin Dimensions</h2>
+  <div class="r2"><label>Internal Length (mm)<input id="bL" type="number" value="400"></label><label>Internal Width (mm)<input id="bW" type="number" value="300"></label></div>
+  <div class="r2"><label>Usable Height (mm)<input id="bH" type="number" value="200"></label><label>Wall (mm)<input id="bT" type="number" value="5"></label></div>
+  <button class="p" id="upBin">Update Bin</button>
+
+  <h2>2. Add Part</h2>
+  <label>Part Number<input id="pN" placeholder="e.g. RES-001"></label>
+  <div class="r2"><label>Length (mm)<input id="pL" type="number"></label><label>Width (mm)<input id="pW" type="number"></label></div>
+  <div class="r2"><label>Height (mm)<input id="pH" type="number"></label><label>Quantity<input id="pQ" type="number" value="10"></label></div>
+  <label>Weight (g each)<input id="pG" type="number" value="1"></label>
+  <button class="p" id="addP">+ Add Part</button>
+
+  <h2>3. Parts</h2>
+  <div id="list"></div>
+  <div id="info">Select a part to rotate it.</div>
+  <button id="rx" disabled>Rotate X</button><button id="ry" disabled>Rotate Y</button><button id="rz" disabled>Rotate Z</button><button id="ra" disabled>Auto Orient</button>
+  <br><button class="p" id="pack">Auto Pack Bin</button><button id="clr">Clear All</button><button id="rst">Reset View</button>
+
+  <h2>4. Bin Consumption</h2>
+  <div id="stats"></div>
+</div>
+<div id="view">
+  <div id="toast"></div>
+  <div id="hint"><b>3D Controls</b><br>Drag part = Move<br>Click part = Select<br>Rotate buttons = Change orientation<br>Mouse drag = Rotate camera<br>Scroll = Zoom</div>
+</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $ = id => document.getElementById(id), E = 1e-6;
+const COL = [0xf39c40,0x3b82f6,0x22a55b,0xa855f7,0xef4444,0x14b8c6,0xe5b800,0xec4899];
+const ORI = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];   // [dim along X, dim along Z, dim up] as indexes of [L,W,H]
+const NM = ['L','W','H'];
+let bin = {L:400,W:300,H:200,t:5}, parts = [], pieces = [], selPart = null, nid = 1, drag = null, orbit = null;
+
+/* ---------- scene ---------- */
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xeef1f1);
+const cam = new THREE.PerspectiveCamera(45, 1, 1, 20000);
+const rd = new THREE.WebGLRenderer({antialias:true}); $('view').prepend(rd.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, .7));
+const sun = new THREE.DirectionalLight(0xffffff, .7); sun.position.set(400,800,500); scene.add(sun);
+const grid = new THREE.GridHelper(4000, 40, 0x999999, 0xcfd4d4); grid.position.y = -bin.t - 1; scene.add(grid);
+const binG = new THREE.Group(), pcG = new THREE.Group(); scene.add(binG, pcG);
+const unit = new THREE.BoxGeometry(1,1,1), edgeG = new THREE.EdgesGeometry(unit), edgeM = new THREE.LineBasicMaterial({color:0x222222});
+let th = .8, ph = 1.0, rad = 900; const tgt = new THREE.Vector3(0,80,0);
+function setCam(){ cam.position.set(tgt.x+rad*Math.sin(ph)*Math.sin(th), tgt.y+rad*Math.cos(ph), tgt.z+rad*Math.sin(ph)*Math.cos(th)); cam.lookAt(tgt); }
+function resetView(){ th=.8; ph=1.0; rad=Math.max(bin.L,bin.W,bin.H)*2.1; tgt.set(0,bin.H*.3,0); setCam(); }
+function size(){ const v=$('view'); rd.setSize(v.clientWidth, v.clientHeight); cam.aspect=v.clientWidth/v.clientHeight; cam.updateProjectionMatrix(); }
+new ResizeObserver(size).observe($('view'));
+
+function buildBin(){
+  while(binG.children.length) binG.remove(binG.children[0]);
+  const {L,W,H,t} = bin, m = new THREE.MeshLambertMaterial({color:0x23282b});
+  const add = (sx,sy,sz,x,y,z) => { const b = new THREE.Mesh(unit, m); b.scale.set(sx,sy,sz); b.position.set(x,y,z); binG.add(b); };
+  add(L+2*t, t, W+2*t, 0, -t/2, 0);                                                    // floor
+  add(t, H, W+2*t, -(L+t)/2, H/2, 0); add(t, H, W+2*t, (L+t)/2, H/2, 0);               // left / right
+  add(L, H, t, 0, H/2, -(W+t)/2);     add(L, H, t, 0, H/2, (W+t)/2);                   // back / front
+  grid.position.y = -t - 1;
+}
+
+/* ---------- geometry helpers ---------- */
+const dimsOf = (p,pm) => { const d=[p.l,p.w,p.h]; return {dx:d[pm[0]], dz:d[pm[1]], dy:d[pm[2]]}; };
+const fits = d => d.dx<=bin.L+E && d.dz<=bin.W+E && d.dy<=bin.H+E;
+const hit = (a,b) => a.x<b.x+b.dx-E && a.x+a.dx>b.x+E && a.y<b.y+b.dy-E && a.y+a.dy>b.y+E && a.z<b.z+b.dz-E && a.z+a.dz>b.z+E;
+const inside = c => c.x>=-E && c.y>=-E && c.z>=-E && c.x+c.dx<=bin.L+E && c.y+c.dy<=bin.H+E && c.z+c.dz<=bin.W+E;
+function settle(c, others){ let y=0; for(const b of others) if(c.x<b.x+b.dx-E&&c.x+c.dx>b.x+E&&c.z<b.z+b.dz-E&&c.z+c.dz>b.z+E) y=Math.max(y,b.y+b.dy); return y; }
+
+/* ---------- packing (heuristic: largest first, 6 orientations, lowest position) ---------- */
+function pack(){
+  const items=[]; parts.forEach(p=>{ for(let i=0;i<p.qty;i++) items.push(p); });
+  items.sort((a,b)=>b.l*b.w*b.h-a.l*a.w*a.h);
+  const placed=[], pts=[[0,0]], keys=new Set(['0,0']), bad=new Set();
+  const addPt=(x,z)=>{ const k=x.toFixed(2)+','+z.toFixed(2); if(x<bin.L-E&&z<bin.W-E&&!keys.has(k)){keys.add(k);pts.push([x,z]);} };
+  for(const p of items){
+    if(bad.has(p)) continue;
+    let best=null;
+    for(const pm of (p.pm?[p.pm]:ORI)){
+      const d=dimsOf(p,pm); if(!fits(d)) continue;
+      for(const [x,z] of pts){
+        const c={part:p,x,z,y:0,...d};
+        if(x+d.dx>bin.L+E||z+d.dz>bin.W+E) continue;
+        c.y=settle(c,placed);
+        if(!inside(c)||placed.some(b=>hit(c,b))) continue;
+        const s=[c.y+d.dy,x,z];
+        if(!best||s[0]<best.s[0]-E||(Math.abs(s[0]-best.s[0])<E&&(s[1]<best.s[1]-E||(Math.abs(s[1]-best.s[1])<E&&s[2]<best.s[2])))) best={c,s};
+      }
+    }
+    if(!best){ bad.add(p); continue; }
+    const c=best.c; placed.push(c); addPt(c.x+c.dx,c.z); addPt(c.x,c.z+c.dz); addPt(c.x+c.dx,0); addPt(0,c.z+c.dz);
+  }
+  pieces=placed; draw();
+  const un=items.length-placed.length;
+  toast(un? `Bin capacity exceeded — ${un} pcs could not be placed.` : 'All parts placed inside the bin.');
+}
+const place = c => c.mesh.position.set(-bin.L/2+c.x+c.dx/2, c.y+c.dy/2, -bin.W/2+c.z+c.dz/2);
+function draw(){
+  while(pcG.children.length) pcG.remove(pcG.children[0]);
+  parts.forEach(p=>p.mat.emissive.setHex(p===selPart?0x555522:0));
+  pieces.forEach(c=>{
+    const m=new THREE.Mesh(unit,c.part.mat); m.scale.set(c.dx,c.dy,c.dz); m.add(new THREE.LineSegments(edgeG,edgeM));
+    m.userData.c=c; c.mesh=m; place(c); pcG.add(m);
+  });
+  ui();
+}
+
+/* ---------- UI ---------- */
+const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function ui(){
+  $('list').innerHTML = parts.map(p=>{
+    const n=pieces.filter(c=>c.part===p).length;
+    return `<div class="row${p===selPart?' s':''}" data-id="${p.id}"><i style="background:#${p.col.toString(16).padStart(6,'0')}"></i><span><b>${esc(p.pn)}</b> ${p.l}×${p.w}×${p.h} · ${n}/${p.qty}</span><button data-rm="${p.id}">✕</button></div>`;
+  }).join('') || '<div class="row">No parts</div>';
+  ['rx','ry','rz','ra'].forEach(i=>$(i).disabled=!selPart);
+  $('info').innerHTML = selPart ? `<b>${esc(selPart.pn)}</b> · orientation: ${selPart.pm?selPart.pm.map(i=>NM[i]).join('×')+' (X×Z×up)':'Auto'}` : 'Select a part to rotate it.';
+  const V=bin.L*bin.W*bin.H, occ=pieces.reduce((s,c)=>s+c.dx*c.dy*c.dz,0);
+  const req=parts.reduce((s,p)=>s+p.qty,0), wt=pieces.reduce((s,c)=>s+c.part.g,0);
+  $('stats').innerHTML = `Bin volume: ${Math.round(V).toLocaleString()} mm³<br>Occupied: ${Math.round(occ).toLocaleString()} mm³<br>Remaining: ${Math.round(V-occ).toLocaleString()} mm³<br>Space used: <b>${(occ/V*100).toFixed(1)}%</b><br>Requested: ${req} · Placed: ${pieces.length} · <b style="color:${req>pieces.length?'#d33':'#168a45'}">Unplaced: ${req-pieces.length}</b><br>Placed weight: ${Math.round(wt*10)/10} g`;
+}
+let tt; function toast(m){ const t=$('toast'); t.textContent=m; t.style.opacity=1; clearTimeout(tt); tt=setTimeout(()=>t.style.opacity=0,3000); }
+const num = id => parseFloat($(id).value);
+
+$('upBin').onclick=()=>{
+  const L=num('bL'),W=num('bW'),H=num('bH'),t=num('bT');
+  if(![L,W,H].every(v=>v>0)||!(t>=0)) return toast('Enter valid bin dimensions (> 0).');
+  bin={L,W,H,t}; buildBin(); resetView(); pack(); toast('Bin dimensions updated');
+};
+$('addP').onclick=()=>{
+  const pn=$('pN').value.trim(), l=num('pL'), w=num('pW'), h=num('pH'), q=num('pQ'), g=num('pG');
+  if(!pn) return toast('Part number is required.');
+  if(parts.some(p=>p.pn.toLowerCase()===pn.toLowerCase())) return toast('Part number already exists.');
+  if(![l,w,h].every(v=>v>0)||!Number.isInteger(q)||q<1||!(g>=0)) return toast('Dimensions must be > 0 and quantity a whole number ≥ 1.');
+  const p={id:nid,pn,l,w,h,qty:q,g:g||0,pm:null,col:COL[(nid-1)%COL.length]}; nid++;
+  if(!ORI.some(o=>fits(dimsOf(p,o)))) return toast(`Part ${pn} cannot fit inside the bin in any orientation.`);
+  p.mat=new THREE.MeshLambertMaterial({color:p.col}); parts.push(p); selPart=p; pack();
+  ['pN','pL','pW','pH'].forEach(i=>$(i).value='');
+};
+$('list').onclick=e=>{
+  const rm=e.target.dataset.rm;
+  if(rm){ parts=parts.filter(p=>p.id!=rm); if(selPart&&selPart.id==rm) selPart=null; return pack(); }
+  const r=e.target.closest('.row'); if(r&&r.dataset.id){ selPart=parts.find(p=>p.id==r.dataset.id); draw(); }
+};
+function rot(a){
+  if(!selPart) return;
+  const b=selPart.pm||ORI[0], n=a==='x'?[b[0],b[2],b[1]]:a==='y'?[b[1],b[0],b[2]]:[b[2],b[1],b[0]];
+  if(!fits(dimsOf(selPart,n))) return toast('Part cannot fit in the selected bin/orientation.');
+  selPart.pm=n; pack();
+}
+$('rx').onclick=()=>rot('x'); $('ry').onclick=()=>rot('y'); $('rz').onclick=()=>rot('z');
+$('ra').onclick=()=>{ if(selPart){ selPart.pm=null; pack(); } };
+$('pack').onclick=pack;
+$('clr').onclick=()=>{ parts=[]; pieces=[]; selPart=null; draw(); toast('All parts cleared.'); };
+$('rst').onclick=resetView;
+
+/* ---------- mouse: click/drag part, orbit camera, zoom ---------- */
+const ray=new THREE.Raycaster(), pt=new THREE.Vector3();
+const ndc=e=>{ const r=rd.domElement.getBoundingClientRect(); return new THREE.Vector2((e.clientX-r.left)/r.width*2-1, -(e.clientY-r.top)/r.height*2+1); };
+rd.domElement.addEventListener('pointerdown',e=>{
+  rd.domElement.setPointerCapture(e.pointerId);
+  ray.setFromCamera(ndc(e),cam);
+  const h=ray.intersectObjects(pcG.children,false)[0];
+  if(h&&e.button===0){ const c=h.object.userData.c; selPart=c.part; drag={c,yc:h.object.position.y,off:null}; draw(); }
+  else orbit={x:e.clientX,y:e.clientY};
+});
+rd.domElement.addEventListener('pointermove',e=>{
+  if(drag){
+    ray.setFromCamera(ndc(e),cam);
+    if(!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),-drag.yc),pt)) return;
+    const c=drag.c, n={...c};
+    n.x=Math.min(Math.max(pt.x+bin.L/2-c.dx/2,0),bin.L-c.dx); n.z=Math.min(Math.max(pt.z+bin.W/2-c.dz/2,0),bin.W-c.dz);
+    const others=pieces.filter(b=>b!==c); n.y=settle(n,others);
+    if(inside(n)&&!others.some(b=>hit(n,b))){ c.x=n.x; c.y=n.y; c.z=n.z; place(c); }
+  } else if(orbit){
+    th-=(e.clientX-orbit.x)*.008; ph=Math.min(Math.max(ph-(e.clientY-orbit.y)*.008,.05),Math.PI/2-.02);
+    orbit={x:e.clientX,y:e.clientY}; setCam();
+  }
+});
+const endDrag=()=>{ if(drag) ui(); drag=null; orbit=null; };
+rd.domElement.addEventListener('pointerup',endDrag); rd.domElement.addEventListener('pointercancel',endDrag);
+rd.domElement.addEventListener('wheel',e=>{ e.preventDefault(); rad=Math.min(Math.max(rad*(e.deltaY>0?1.1:.9),100),6000); setCam(); },{passive:false});
+
+/* ---------- start ---------- */
+[['PART-A',100,50,20,20],['PART-B',80,40,30,15],['PART-C',60,30,25,10]].forEach(a=>{
+  const p={id:nid,pn:a[0],l:a[1],w:a[2],h:a[3],qty:a[4],g:5,pm:null,col:COL[(nid-1)%COL.length]}; nid++;
+  p.mat=new THREE.MeshLambertMaterial({color:p.col}); parts.push(p);
+});
+size(); buildBin(); resetView(); pack();
+(function loop(){ requestAnimationFrame(loop); rd.render(scene,cam); })();
+</script>
+</body>
+</html>
